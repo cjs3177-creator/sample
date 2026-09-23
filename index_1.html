@@ -1,876 +1,504 @@
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="3차원 오차 요인이 반영된 진자 운동 및 주기 측정 물리 실험 시뮬레이션">
-<title>진자 주기 측정 실험실</title>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
-<style>
-  :root{padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px); color-scheme:light dark;}
-  img{max-width:100%} [hidden]{display:none!important}
+# =====================================================================================
+#  3차원 오차 요인이 반영된 진자 운동 및 주기(T) 측정 물리 실험 시뮬레이션
+#  ------------------------------------------------------------------------------------
+#  · 실행 환경 : Google Colab / Jupyter (ipywidgets 기반 대화형 UI)
+#  · 사용 모듈 : numpy, scipy, matplotlib, ipywidgets, IPython.display  (코랩 기본 내장)
+#  · 물리 모델 : 대각도 비선형 진자 + 2차 공기저항 + 원뿔진자(3D) 섭동 + 실의 미세 떨림
+#  · 측정 모델 : 영점 정방향 통과 시각 검출 → 10회 왕복 시간 → 인간 반응오차(±10%) 부여
+# =====================================================================================
 
-  :root{
-    --bg:#e7ecf1;
-    --panel:#ffffff;
-    --panel-2:#f3f6f9;
-    --ink:#101821;
-    --ink-2:#37485a;
-    --muted:#63758a;
-    --line:#d2dae3;
-    --line-soft:#e4eaf1;
-    --accent:#1f4f7a;
-    --accent-ink:#ffffff;
-    --grid:#c9d4de;
-    --c-trace:#34689c;
-    --c-theta:#1b7f72;
-    --c-top:#7a5ea8;
-    --c-mark:#c8455c;
-    --c-string:#7b8a99;
-    --c-bob:#c8455c;
-    --shadow:0 1px 2px rgba(16,24,33,.06), 0 8px 24px rgba(16,24,33,.06);
-    --run:#1b7f72;
-  }
-  @media (prefers-color-scheme: dark){
-    :root:not([data-theme="light"]){
-      --bg:#0d1218;
-      --panel:#151c26;
-      --panel-2:#1b2431;
-      --ink:#e4ebf3;
-      --ink-2:#bac7d6;
-      --muted:#8496a8;
-      --line:#27323f;
-      --line-soft:#1f2834;
-      --accent:#6fa8dc;
-      --accent-ink:#0d1218;
-      --grid:#28323e;
-      --c-trace:#6aa3da;
-      --c-theta:#3fc0ab;
-      --c-top:#b190e0;
-      --c-mark:#ec6a80;
-      --c-string:#8697a8;
-      --c-bob:#ec6a80;
-      --shadow:0 1px 2px rgba(0,0,0,.35), 0 10px 28px rgba(0,0,0,.35);
-      --run:#3fc0ab;
-    }
-  }
-  :root[data-theme="dark"]{
-    --bg:#0d1218; --panel:#151c26; --panel-2:#1b2431; --ink:#e4ebf3; --ink-2:#bac7d6;
-    --muted:#8496a8; --line:#27323f; --line-soft:#1f2834; --accent:#6fa8dc;
-    --accent-ink:#0d1218; --grid:#28323e; --c-trace:#6aa3da; --c-theta:#3fc0ab;
-    --c-top:#b190e0; --c-mark:#ec6a80; --c-string:#8697a8; --c-bob:#ec6a80;
-    --shadow:0 1px 2px rgba(0,0,0,.35), 0 10px 28px rgba(0,0,0,.35); --run:#3fc0ab;
-  }
+import gc
+import numpy as np
+from scipy.integrate import solve_ivp
 
-  *{box-sizing:border-box}
-  body{
-    margin:0; background:var(--bg); color:var(--ink);
-    font-family:"IBM Plex Sans KR","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;
-    font-size:14px; line-height:1.6; -webkit-font-smoothing:antialiased;
-  }
-  .wrap{max-width:1220px; margin:0 auto; padding-inline:16px; padding-block:22px 40px;}
+import matplotlib
+import matplotlib.pyplot as plt
+from matplotlib import animation
+from matplotlib import font_manager
 
-  /* ---------- 헤더 ---------- */
-  header{display:flex; flex-wrap:wrap; align-items:baseline; gap:10px 14px; margin-bottom:18px;}
-  h1{font-size:23px; font-weight:700; margin:0; letter-spacing:-.01em; text-wrap:balance;}
-  .sub{color:var(--muted); font-size:13px; max-width:62ch;}
-  .eyebrow{
-    font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; letter-spacing:.14em;
-    text-transform:uppercase; color:var(--muted); border:1px solid var(--line);
-    padding:2px 8px; border-radius:999px;
-  }
+import ipywidgets as widgets
+from IPython.display import display, HTML
 
-  /* ---------- 레이아웃 ---------- */
-  .main{display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:14px; align-items:stretch;}
-  .charts{display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,1fr); gap:14px; margin-top:14px;}
-  .lower{display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:14px; margin-top:14px;}
-  @media (max-width:900px){
-    .main,.charts,.lower{grid-template-columns:minmax(0,1fr);}
-  }
+# Colab 인라인 렌더링 보장 (스크립트로 실행될 때는 무시)
+try:
+    from IPython import get_ipython
+    get_ipython().run_line_magic("matplotlib", "inline")
+except Exception:
+    pass
 
-  .card{background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
-  .card-h{
-    display:flex; align-items:center; justify-content:space-between; gap:10px;
-    padding:11px 14px; border-bottom:1px solid var(--line-soft);
-  }
-  .card-t{font-size:13px; font-weight:600; letter-spacing:-.005em;}
-  .card-n{font-size:11.5px; color:var(--muted); font-family:"IBM Plex Mono",monospace;}
 
-  /* ---------- 무대(진자) ---------- */
-  .stage{position:relative; overflow:hidden;}
-  #stage{display:block; width:100%; height:clamp(400px,58vh,620px); touch-action:none; cursor:grab;}
-  #stage:active{cursor:grabbing}
-  .stage-badge{
-    position:absolute; left:14px; bottom:12px; display:flex; gap:6px; flex-wrap:wrap;
-    font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--muted);
-  }
-  .stage-badge span{background:var(--panel-2); border:1px solid var(--line-soft); padding:2px 7px; border-radius:6px;}
+# =====================================================================================
+# 0. 물리 상수 및 전역 설정
+# =====================================================================================
+G        = 9.80665     # 중력가속도 [m/s^2]
+RHO_AIR  = 1.225       # 공기 밀도 [kg/m^3]
+MU_AIR   = 1.81e-5     # 공기 점성계수 [Pa·s]  (선형 항 b 계산용)
+C_D      = 0.47        # 구(球) 형태 추의 항력계수 (무차원)
+RHO_BOB  = 7800.0      # 추의 밀도(강철 기준) [kg/m^3] → 질량으로부터 반지름/단면적 산출
 
-  /* ---------- 초시계 ---------- */
-  .watch{display:flex; flex-direction:column; min-height:100%;}
-  .watch-body{padding:16px 14px 14px; display:flex; flex-direction:column; gap:12px; flex:1;}
-  .state{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--muted);}
-  .dot{width:8px; height:8px; border-radius:50%; background:var(--line); flex:none;}
-  .state.run .dot{background:var(--run); animation:blink 1s steps(2,end) infinite;}
-  .state.done .dot{background:var(--c-mark);}
-  @keyframes blink{50%{opacity:.25}}
-  @media (prefers-reduced-motion:reduce){.state.run .dot{animation:none}}
+DRAG_SCALE = 1.0       # 감쇠 가시성 조절용 배율(수업용으로 감쇠를 더 뚜렷하게 하려면 3~5 권장)
 
-  .time{
-    font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums;
-    font-size:clamp(34px,7vw,44px); font-weight:500; letter-spacing:-.02em; line-height:1.05;
-    color:var(--ink);
-  }
-  .time .ms{font-size:.62em; color:var(--muted);}
-  .counter{
-    display:flex; align-items:baseline; gap:6px; font-family:"IBM Plex Mono",monospace;
-    font-variant-numeric:tabular-nums;
-  }
-  .counter b{font-size:24px; font-weight:600;}
-  .counter span{font-size:12px; color:var(--muted);}
-  .bar{height:5px; border-radius:99px; background:var(--panel-2); overflow:hidden; border:1px solid var(--line-soft);}
-  .bar i{display:block; height:100%; width:0%; background:var(--run); transition:width .12s linear;}
+N_CYCLES   = 10        # 측정할 왕복 횟수
+DELTA_MAX  = 0.10      # 측정 오차 delta 의 최대 크기 (±10%)
+DELTA_SIG  = 0.04      # 측정 오차 delta 의 표준편차 (절단 정규분포)
 
-  .laps{border-top:1px solid var(--line-soft); padding-top:10px; margin-top:2px;}
-  .laps-h{font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:6px;}
-  .lap-grid{display:grid; grid-template-columns:1fr 1fr; gap:2px 12px;}
-  .lap{
-    display:flex; justify-content:space-between; gap:6px; font-family:"IBM Plex Mono",monospace;
-    font-size:11.5px; font-variant-numeric:tabular-nums; padding:1.5px 0; color:var(--muted);
-    border-bottom:1px dotted var(--line-soft);
-  }
-  .lap.on{color:var(--ink-2);}
-  .lap .n{color:var(--muted);}
-  .lap .v{font-weight:500;}
+FRAME_MAX  = 90        # 애니메이션 최대 프레임 수 (코랩 메모리 보호)
+ANIM_DPI   = 64        # 애니메이션 프레임 해상도 (낮출수록 용량·메모리 절감)
 
-  .derive{border-top:1px solid var(--line-soft); padding-top:10px; margin-top:auto;}
-  .deriv-line{font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums;
-    font-size:12px; color:var(--muted);}
-  .deriv-res{font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums;
-    font-size:20px; font-weight:600; color:var(--c-theta);}
 
-  /* ---------- 컨트롤 ---------- */
-  .controls{margin-top:14px; padding:14px; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px;}
-  @media (max-width:780px){.controls{grid-template-columns:minmax(0,1fr);}}
-  .sliders{display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:12px 20px;}
-  .field label{display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:12.5px; color:var(--ink-2);}
-  .field .val{font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; font-weight:600; color:var(--ink);}
-  input[type=range]{width:100%; margin:6px 0 0; accent-color:var(--accent); height:20px;}
-  input[type=range]:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:4px;}
+# -------------------------------------------------------------------------------------
+# 한글 폰트 자동 탐색 : 코랩에는 한글 폰트가 없을 수 있으므로(외부 다운로드 금지 조건),
+#                      폰트가 없으면 그래프 축 라벨만 영문으로 자동 대체한다.
+#                      (위젯 라벨과 HTML 리포트는 브라우저가 렌더링하므로 항상 한글)
+# -------------------------------------------------------------------------------------
+def _setup_font():
+    """시스템에 설치된 한글 폰트를 찾아 matplotlib 에 적용. 성공 시 True."""
+    candidates = ("NanumGothic", "NanumBarunGothic", "Malgun Gothic", "AppleGothic",
+                  "Noto Sans CJK KR", "Noto Sans KR", "UnDotum", "Gulim")
+    installed = {f.name for f in font_manager.fontManager.ttflist}
+    for name in candidates:
+        if name in installed:
+            matplotlib.rcParams["font.family"] = name
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            return True
+    matplotlib.rcParams["axes.unicode_minus"] = False
+    return False
 
-  .actions{display:flex; flex-direction:column; gap:8px; justify-content:flex-start; min-width:210px;}
-  .row{display:flex; gap:8px; flex-wrap:wrap;}
-  button{
-    font:inherit; font-size:13px; font-weight:600; border-radius:8px; border:1px solid var(--line);
-    background:var(--panel-2); color:var(--ink); padding:8px 12px; cursor:pointer;
-  }
-  button:hover{border-color:var(--muted);}
-  button:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
-  button:disabled{opacity:.45; cursor:default;}
-  .primary{background:var(--accent); color:var(--accent-ink); border-color:transparent; padding:10px 14px;}
-  .seg{display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden;}
-  .seg button{border:0; border-radius:0; background:transparent; padding:6px 10px; font-size:12px; font-weight:500;
-    font-family:"IBM Plex Mono",monospace;}
-  .seg button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink);}
-  .hint{font-size:11.5px; color:var(--muted);}
 
-  /* ---------- 그래프 ---------- */
-  .plot{display:block; width:100%; height:200px;}
+KO_FONT = _setup_font()
 
-  /* ---------- 리포트 ---------- */
-  table{width:100%; border-collapse:collapse; font-size:13px;}
-  th,td{padding:6px 14px; text-align:left;}
-  thead th, .sec th{
-    font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
-    font-weight:600; background:var(--panel-2);
-  }
-  tbody td{border-bottom:1px solid var(--line-soft);}
-  td.v{text-align:right; font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; font-weight:600;}
-  td.d{text-align:right; font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums;
-       color:var(--muted); font-weight:400; width:136px; white-space:nowrap;}
-  tr.key td{background:color-mix(in srgb, var(--c-theta) 9%, transparent);}
-  .note{padding:10px 14px 13px; font-size:11.5px; color:var(--muted); border-top:1px solid var(--line-soft);}
-  .note code{font-family:"IBM Plex Mono",monospace;}
+# 그래프용 라벨 (한글 폰트 유무에 따라 자동 선택)
+LBL = {
+    "traj3d": ("진자 추의 3차원 궤적", "3D Trajectory of the Bob"),
+    "theta":  ("시간에 따른 각변위 θ(t)", "Angular Displacement θ(t)"),
+    "time":   ("시간 t [s]", "time t [s]"),
+    "ang":    ("각변위 θ [deg]", "angle θ [deg]"),
+    "cross":  ("영점 정방향 통과", "zero up-crossing"),
+    "start":  ("출발점", "start"),
+    "top":    ("위에서 본 궤적 (x–y 평면)", "Top View (x-y plane)"),
+    "note":   ("※ y축 확대", "* y axis magnified"),
+}
+def L(key):
+    """한글 폰트가 있으면 한글 라벨, 없으면 영문 라벨을 반환."""
+    return LBL[key][0] if KO_FONT else LBL[key][1]
 
-  .stats{display:flex; gap:18px; flex-wrap:wrap; padding:12px 14px; border-bottom:1px solid var(--line-soft);}
-  .stat .k{font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted);}
-  .stat .n{font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; font-size:18px; font-weight:600;}
-  .chips{display:flex; flex-wrap:wrap; gap:5px; padding:12px 14px;}
-  .chip{
-    font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; font-size:11.5px;
-    background:var(--panel-2); border:1px solid var(--line-soft); border-radius:6px; padding:2px 7px; color:var(--ink-2);
-  }
-  .chip.last{border-color:var(--c-mark); color:var(--ink);}
-  .empty{padding:12px 14px; font-size:12.5px; color:var(--muted);}
-  .busy{opacity:.42;}
-  footer{margin-top:22px; font-size:11.5px; color:var(--muted); text-align:center;}
-</style>
 
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <h1>진자 주기 측정 실험실</h1>
-    <span class="eyebrow">3D error model</span>
-    <p class="sub">질량·길이·방출 각도를 정하고 실험을 시작하면, 진자가 평형점을 정방향으로 지나는 순간부터 초시계가 돌아갑니다. 10회 왕복까지 걸린 시간을 재어 주기를 구하세요.</p>
-  </header>
+# =====================================================================================
+# 1. 물리 엔진 : 3차원 오차 요인이 포함된 진자 운동 방정식
+# =====================================================================================
+# 상태 변수 y = [theta, omega, psi, psi_dot]
+#   theta : 주 진동면(x–z 평면) 안에서의 각변위      [rad]
+#   psi   : 주 진동면에 직교(y 방향)하는 미세 각변위 [rad]  → 원뿔진자/리사주 효과
+#
+#   d²θ/dt² = -(g / l(t))·sinθ  -  (b/m)·ω  -  (k_q/m)·|v|·ω
+#   d²ψ/dt² = -(g / l(t))·(1+ε)·sinψ - (b/m)·ψ' - (k_q/m)·|v|·ψ'
+#
+#   · l(t) = l₀ + A·sin(ω_s t)                : 실의 고주파 미세 떨림(진폭 A ~ 정규분포)
+#   · b    = 6πμr                              : 저속 선형 저항(스토크스 항)
+#   · k_q  = ½·C_d·ρ·A_cs                      : 속도의 제곱에 비례하는 공기저항
+#     → 각가속도 항이 1/m 에 비례하므로 질량 m 이 작을수록 감쇠가 빠르다.
+#   · ε    : 직교 방향의 미세 진동수 어긋남 → 진동면이 서서히 회전(세차)하며 리사주 궤적 생성
+# =====================================================================================
 
-  <div class="main">
-    <section class="card stage">
-      <div class="card-h">
-        <span class="card-t">진자 운동</span>
-        <span class="card-n" id="stageInfo">드래그하면 시점이 돌아갑니다</span>
-      </div>
-      <canvas id="stage" aria-label="진자의 3차원 운동"></canvas>
-      <div class="stage-badge">
-        <span id="bMass">m = 100 g</span>
-        <span id="bLen">l = 1.00 m</span>
-        <span id="bAng">θ₀ = 20°</span>
-      </div>
-    </section>
+def _bob_geometry(m_kg):
+    """질량으로부터 구형 추의 반지름 r [m] 과 단면적 A [m^2] 를 산출."""
+    r = (3.0 * m_kg / (4.0 * np.pi * RHO_BOB)) ** (1.0 / 3.0)
+    return r, np.pi * r * r
 
-    <section class="card watch" aria-live="polite">
-      <div class="card-h">
-        <span class="card-t">초시계</span>
-        <span class="card-n">10회 왕복</span>
-      </div>
-      <div class="watch-body">
-        <div class="state" id="wState"><i class="dot"></i><span id="wStateText">측정 대기</span></div>
-        <div class="time" id="wTime">0.000<span class="ms"> s</span></div>
-        <div class="counter"><b id="wLaps">0</b><span>/ 10 회 왕복</span></div>
-        <div class="bar"><i id="wBar"></i></div>
 
-        <div class="laps">
-          <div class="laps-h">왕복별 누적 시간</div>
-          <div class="lap-grid" id="lapGrid"></div>
-        </div>
+def _string_length(t, p):
+    """실의 미세 떨림이 반영된 순간 길이 l(t) [m]."""
+    return p["l0"] + p["A_str"] * np.sin(p["w_str"] * t + p["ph_str"])
 
-        <div class="derive" id="derive" hidden>
-          <div class="laps-h">측정한 주기</div>
-          <div class="deriv-line" id="deriveLine">—</div>
-          <div class="deriv-res" id="deriveRes">—</div>
-        </div>
-      </div>
-    </section>
-  </div>
 
-  <section class="card controls">
-    <div class="sliders">
-      <div class="field">
-        <label for="fm">진자의 질량 m<span class="val" id="vm">100 g</span></label>
-        <input type="range" id="fm" min="10" max="500" step="5" value="100">
-      </div>
-      <div class="field">
-        <label for="fl">실의 길이 l<span class="val" id="vl">1.00 m</span></label>
-        <input type="range" id="fl" min="0.2" max="2" step="0.05" value="1">
-      </div>
-      <div class="field">
-        <label for="fa">초기 방출 각도 θ₀<span class="val" id="va">20°</span></label>
-        <input type="range" id="fa" min="5" max="60" step="1" value="20">
-      </div>
-      <div class="field">
-        <label for="fd">공기저항 배율<span class="val" id="vd">×1 (실제)</span></label>
-        <input type="range" id="fd" min="1" max="5" step="1" value="1">
-      </div>
-    </div>
+def _rhs(t, y, p):
+    """진자 운동 방정식의 우변 (3차원 섭동 포함)."""
+    th, om, ps, oms = y
+    l_t = _string_length(t, p)
 
-    <div class="actions">
-      <button class="primary" id="run">실험 시작 / 다시 측정</button>
-      <div class="row">
-        <button id="pause" disabled>일시정지</button>
-        <button id="skip" disabled>끝까지</button>
-      </div>
-      <div class="row" style="align-items:center">
-        <div class="seg" role="group" aria-label="재생 속도">
-          <button data-sp="0.5">0.5×</button>
-          <button data-sp="1" aria-pressed="true">1×</button>
-          <button data-sp="2">2×</button>
-          <button data-sp="4">4×</button>
-        </div>
-        <button id="clear">이력 초기화</button>
-      </div>
-      <p class="hint">버튼을 누를 때마다 같은 조건이라도 실의 떨림·공기 와류·반응 시간이 새로 뽑혀 다른 값이 나옵니다.</p>
-    </div>
-  </section>
+    # 추의 실제 속력 (주 진동 + 직교 섭동의 합성)
+    v_mag = l_t * np.sqrt(om * om + oms * oms)
 
-  <div class="charts">
-    <section class="card">
-      <div class="card-h">
-        <span class="card-t">각변위 θ(t)</span>
-        <span class="card-n">▼ 평형점 정방향 통과</span>
-      </div>
-      <canvas id="theta" class="plot" aria-label="시간에 따른 각변위 그래프"></canvas>
-    </section>
-    <section class="card">
-      <div class="card-h">
-        <span class="card-t">위에서 본 궤적</span>
-        <span class="card-n" id="topScale">y축 확대</span>
-      </div>
-      <canvas id="top" class="plot" aria-label="위에서 본 x-y 평면 궤적"></canvas>
-    </section>
-  </div>
+    # 감쇠 계수 (선형 스토크스 + 2차 공기저항), 모두 1/m 에 비례
+    c_lin = p["b_lin"] / p["m"]
+    c_qua = p["k_qua"] / p["m"] * v_mag
 
-  <div class="lower">
-    <section class="card" id="reportCard">
-      <div class="card-h">
-        <span class="card-t">실험 리포트</span>
-        <span class="card-n" id="runNo">제 0 회 측정</span>
-      </div>
-      <div style="overflow-x:auto"><table id="report"><tbody></tbody></table></div>
-      <div class="note" id="noteBox"></div>
-    </section>
+    a_th = -(G / l_t) * np.sin(th) - c_lin * om - c_qua * om
+    a_ps = -(G / l_t) * (1.0 + p["eps"]) * np.sin(ps) - c_lin * oms - c_qua * oms
+    return [om, a_th, oms, a_ps]
 
-    <section class="card">
-      <div class="card-h">
-        <span class="card-t">동일 조건 반복 측정</span>
-        <span class="card-n" id="histN">0회</span>
-      </div>
-      <div class="stats" id="histStats" hidden>
-        <div class="stat"><div class="k">평균</div><div class="n" id="hMean">–</div></div>
-        <div class="stat"><div class="k">표준편차</div><div class="n" id="hSd">–</div></div>
-        <div class="stat"><div class="k">최대−최소</div><div class="n" id="hRange">–</div></div>
-      </div>
-      <div class="chips" id="histChips"></div>
-      <div class="empty" id="histEmpty">같은 조건으로 두 번 이상 측정하면 측정값이 얼마나 흩어지는지 여기에 모입니다.</div>
-    </section>
-  </div>
 
-  <footer>θ″ = −(g/l(t))·sinθ − (b/m)·θ′ − (½C<sub>d</sub>ρA/m)·|v|·θ′ &nbsp;·&nbsp; RK4 수치적분 (Δt = 1 ms)</footer>
-</div>
+def _event_up_cross(t, y, p):
+    """θ = 0 통과 감지 이벤트 함수 (direction=1 → 정방향 통과만 검출)."""
+    return y[0]
+_event_up_cross.direction = 1     # 음(-) → 양(+) 방향으로 지날 때만 기록
+_event_up_cross.terminal = False
 
-<script>
-(() => {
-  "use strict";
 
-  /* ============================ 물리 상수 ============================ */
-  const G = 9.80665, RHO_AIR = 1.225, MU_AIR = 1.81e-5, C_D = 0.47, RHO_BOB = 7800;
-  const NC = 10;              // 측정할 왕복 횟수
-  const DT = 0.001;           // 적분 시간 간격 [s]
-  const SAMP = 10;            // 렌더링용 샘플 간격 (10 → 0.01 s)
-  const DELTA_SIG = 0.04, DELTA_MAX = 0.10;   // 사람의 반응시간 오차
+def simulate(m_g, l_m, theta0_deg, rng):
+    """
+    한 번의 '실험'을 수행한다. 동일한 입력값이라도 rng 가 만들어내는
+    미세 오차 요인(실 떨림·초기 횡방향 흔들림·진동수 어긋남)이 매번 달라지므로
+    측정 결과 또한 독립적으로 달라진다.
+    반환: 결과 딕셔너리
+    """
+    m  = m_g / 1000.0                 # g → kg
+    th0 = np.deg2rad(theta0_deg)      # deg → rad
+    r, A_cs = _bob_geometry(m)
 
-  const gauss = () => {
-    let u = 0, v = 0;
-    while (u === 0) u = Math.random();
-    while (v === 0) v = Math.random();
-    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-  };
-  const uni = (a, b) => a + Math.random() * (b - a);
-  const sign = () => (Math.random() < 0.5 ? -1 : 1);
+    # ---- (a) 무작위 오차 요인 생성 -------------------------------------------------
+    A_str = abs(rng.normal(0.0, 0.0015)) * l_m          # 실 떨림 진폭 (길이의 ~0.15%)
+    f_str = rng.uniform(15.0, 30.0)                     # 실 떨림 주파수 [Hz]
+    eps   = rng.uniform(-0.02, 0.02)                    # 직교 방향 진동수 어긋남
+    psi0  = th0 * rng.uniform(0.010, 0.040) * rng.choice([-1.0, 1.0])   # 초기 횡방향 각
+    dpsi0 = th0 * rng.uniform(0.000, 0.015) * rng.choice([-1.0, 1.0])   # 초기 횡방향 각속도
 
-  /* ---- 운동방정식 : y = [θ, θ′, ψ, ψ′] ----
-     ψ 는 주 진동면에 직교하는 미세 각변위 → 원뿔진자(리사주) 효과 */
-  function deriv(t, y, p, out) {
-    const lt = p.l0 + p.As * Math.sin(p.ws * t + p.ph);
-    const om = y[1], oms = y[3];
-    const v = lt * Math.hypot(om, oms);      // 추의 실제 속력
-    const cq = p.cq * v;                     // 속도 제곱 저항 (1/m 에 비례)
-    out[0] = om;
-    out[1] = -(G / lt) * Math.sin(y[0]) - p.cl * om - cq * om;
-    out[2] = oms;
-    out[3] = -(G / lt) * (1 + p.eps) * Math.sin(y[2]) - p.cl * oms - cq * oms;
-  }
-
-  const k1 = [0,0,0,0], k2 = [0,0,0,0], k3 = [0,0,0,0], k4 = [0,0,0,0], tmp = [0,0,0,0];
-  function rk4(t, y, h, p) {
-    deriv(t, y, p, k1);
-    for (let i = 0; i < 4; i++) tmp[i] = y[i] + h / 2 * k1[i];
-    deriv(t + h / 2, tmp, p, k2);
-    for (let i = 0; i < 4; i++) tmp[i] = y[i] + h / 2 * k2[i];
-    deriv(t + h / 2, tmp, p, k3);
-    for (let i = 0; i < 4; i++) tmp[i] = y[i] + h * k3[i];
-    deriv(t + h, tmp, p, k4);
-    for (let i = 0; i < 4; i++) y[i] += h / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
-  }
-
-  /* ---- 한 번의 실험 ---- */
-  function simulate(mg, l0, th0deg, dragScale) {
-    const m = mg / 1000, th0 = th0deg * Math.PI / 180;
-    const r = Math.cbrt(3 * m / (4 * Math.PI * RHO_BOB));   // 강철 구 가정
-    const A = Math.PI * r * r;
-
-    const As = Math.abs(gauss() * 0.0015) * l0;   // 실 떨림 진폭
-    const fs = uni(15, 30);                       // 실 떨림 주파수 [Hz]
-    const eps = uni(-0.02, 0.02);                 // 직교 방향 진동수 어긋남
-    const p = {
-      l0, As, ws: 2 * Math.PI * fs, ph: uni(0, 2 * Math.PI), eps,
-      cl: 6 * Math.PI * MU_AIR * r * dragScale / m,        // 선형(스토크스) 저항
-      cq: 0.5 * C_D * RHO_AIR * A * dragScale / m          // 2차 공기저항
-    };
-
-    const T_theory = 2 * Math.PI * Math.sqrt(l0 / G);
-    const T_corr = T_theory * (1 + th0 * th0 / 16);
-    const tMax = T_corr * (NC + 3);
-
-    const y = [th0, 0, th0 * uni(0.010, 0.040) * sign(), th0 * uni(0, 0.015) * sign()];
-    const S = { t: [], x: [], y: [], z: [], th: [] };
-    const cross = [];
-    let t = 0, step = 0, maxX = 0, maxY = 0;
-
-    const push = (tt, st) => {
-      const lt = p.l0 + p.As * Math.sin(p.ws * tt + p.ph);
-      const sx = Math.sin(st[0]), sy = Math.sin(st[2]);
-      const sz = Math.sqrt(Math.max(0, 1 - sx * sx - sy * sy));
-      const X = lt * sx, Y = lt * sy, Z = -lt * sz;
-      S.t.push(tt); S.x.push(X); S.y.push(Y); S.z.push(Z); S.th.push(st[0]);
-      if (Math.abs(X) > maxX) maxX = Math.abs(X);
-      if (Math.abs(Y) > maxY) maxY = Math.abs(Y);
-    };
-
-    push(0, y);
-    while (t < tMax) {
-      const prev = y[0];
-      rk4(t, y, DT, p);
-      t += DT; step++;
-      // 평형점(θ=0)을 음 → 양 방향으로 지나는 순간을 선형 보간으로 검출
-      if (prev < 0 && y[0] >= 0) cross.push(t - DT + DT * (-prev) / (y[0] - prev));
-      if (step % SAMP === 0) push(t, y);
-      if (cross.length >= NC + 1 && t > cross[NC] + 0.45) break;
+    p = {
+        "m": m, "l0": l_m,
+        "A_str": A_str, "w_str": 2.0 * np.pi * f_str, "ph_str": rng.uniform(0, 2 * np.pi),
+        "eps": eps,
+        "b_lin": 6.0 * np.pi * MU_AIR * r * DRAG_SCALE,          # 선형 저항 b
+        "k_qua": 0.5 * C_D * RHO_AIR * A_cs * DRAG_SCALE,        # 2차 저항 ½C_dρA
     }
 
-    let n, tFirst, tLast;
-    if (cross.length >= NC + 1) { n = NC; tFirst = cross[0]; tLast = cross[NC]; }
-    else if (cross.length >= 2) { n = cross.length - 1; tFirst = cross[0]; tLast = cross[n]; }
-    else return null;
+    # ---- (b) 적분 구간 : 이론 주기로부터 넉넉하게 추정 -----------------------------
+    T_theory = 2.0 * np.pi * np.sqrt(l_m / G)
+    T_corr   = T_theory * (1.0 + th0 ** 2 / 16.0)
+    t_end    = T_corr * (N_CYCLES + 3.0)
 
-    const tSpan = tLast - tFirst;
-    const T_phys = tSpan / n;
+    sol = solve_ivp(
+        _rhs, (0.0, t_end), [th0, 0.0, psi0, dpsi0],
+        args=(p,), method="RK45",
+        rtol=1e-8, atol=1e-10, max_step=0.01,      # 코랩에서 1회 계산 0.5초 내외
+        dense_output=True, events=_event_up_cross,
+    )
 
-    let delta;                                   // 절단 정규분포 (±10%)
-    do { delta = gauss() * DELTA_SIG; } while (Math.abs(delta) > DELTA_MAX);
-    const T_meas = T_phys * (1 + delta);
+    # ---- (c) 주기 검출 : 영점을 '정방향'으로 통과한 시각들 -------------------------
+    crossings = np.asarray(sol.t_events[0], dtype=float)
+    if crossings.size >= N_CYCLES + 1:
+        t_first, t_last = crossings[0], crossings[N_CYCLES]
+        n_used = N_CYCLES
+    elif crossings.size >= 2:                            # 감쇠가 심한 예외 상황 대비
+        t_first, t_last = crossings[0], crossings[-1]
+        n_used = crossings.size - 1
+    else:
+        raise RuntimeError("주기를 검출하지 못했습니다. 입력값을 조정해 주세요.")
+
+    t_span_phys = t_last - t_first                       # 물리적 10회 왕복 시간
+    T_phys = t_span_phys / n_used                        # 물리적 평균 주기
+
+    # ---- (d) 인간의 측정 오차 delta (절단 정규분포, ±10%) --------------------------
+    while True:
+        delta = rng.normal(0.0, DELTA_SIG)
+        if abs(delta) <= DELTA_MAX:
+            break
+    T_meas = T_phys * (1.0 + delta)
+    t_span_meas = T_meas * n_used
+
+    # ---- (e) 궤적 샘플링 (시각화용, 메모리 절약을 위해 고정 개수만 저장) ------------
+    ts = np.linspace(0.0, min(t_last + 0.4, t_end), 1600)
+    Y  = sol.sol(ts)
+    th_s, ps_s = Y[0], Y[2]
+    l_s = _string_length(ts, p)
+
+    sx = np.sin(th_s)
+    sy = np.sin(ps_s)
+    sz = np.sqrt(np.clip(1.0 - sx ** 2 - sy ** 2, 0.0, None))
+    X, Yc, Z = l_s * sx, l_s * sy, -l_s * sz             # 지지점을 원점으로 하는 좌표
 
     return {
-      mg, l0, th0deg, r, n, cross, S,
-      tFirst, tLast, tSpan, T_phys, T_meas, T_theory, T_corr, delta,
-      tEnd: S.t[S.t.length - 1], maxX, maxY, As, fs, eps, dragScale
-    };
-  }
-
-  /* ============================ 색상 토큰 ============================ */
-  let PAL = {};
-  function readPalette() {
-    const cs = getComputedStyle(document.documentElement);
-    const g = n => cs.getPropertyValue(n).trim() || "#888";
-    PAL = {
-      ink: g("--ink"), ink2: g("--ink-2"), muted: g("--muted"), line: g("--line"),
-      soft: g("--line-soft"), panel: g("--panel"), panel2: g("--panel-2"), grid: g("--grid"),
-      trace: g("--c-trace"), theta: g("--c-theta"), top: g("--c-top"),
-      mark: g("--c-mark"), string: g("--c-string"), bob: g("--c-bob")
-    };
-  }
-  readPalette();
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { readPalette(); drawAll(); });
-  new MutationObserver(() => { readPalette(); drawAll(); })
-    .observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-
-  /* ============================ 캔버스 helper ============================ */
-  function fit(cv) {
-    const r = cv.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
-    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
-    const ctx = cv.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, r.width, r.height);
-    return { ctx, w: r.width, h: r.height };
-  }
-  const MONO = '11px "IBM Plex Mono", ui-monospace, monospace';
-
-  /* ============================ 무대 : 3D 진자 ============================ */
-  const stageCv = document.getElementById("stage");
-  let az = 0.62, el = 0.30;      // 시점(방위각·고도각)
-
-  function drawStage(res, tNow) {
-    const { ctx, w, h } = fit(stageCv);
-    if (!res) return;
-    const l0 = res.l0, th0 = res.th0deg * Math.PI / 180;
-
-    const spanY = l0 * 1.22;
-    const spanX = Math.max(l0 * Math.sin(th0) * 1.35, l0 * 0.25);
-    const s = Math.min((h - 78) / spanY, (w * 0.46) / spanX);
-    const cx = w / 2, cy = 46;
-    const ca = Math.cos(az), sa = Math.sin(az), ce = Math.cos(el), se = Math.sin(el);
-    const px = (x, y) => cx + s * (x * ca - y * sa);
-    const py = (x, y, z) => cy - s * (z * ce - (x * sa + y * ca) * se);
-
-    const floor = -l0 * 1.14;
-
-    /* 바닥 격자 : 3차원 깊이감을 위한 기준면 */
-    const gmax = Math.max(spanX * 0.85, l0 * 0.3), gstep = gmax / 4;
-    ctx.strokeStyle = PAL.grid; ctx.globalAlpha = 0.5; ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = -4; i <= 4; i++) {
-      const u = i * gstep;
-      ctx.moveTo(px(u, -gmax), py(u, -gmax, floor)); ctx.lineTo(px(u, gmax), py(u, gmax, floor));
-      ctx.moveTo(px(-gmax, u), py(-gmax, u, floor)); ctx.lineTo(px(gmax, u), py(gmax, u, floor));
-    }
-    ctx.stroke(); ctx.globalAlpha = 1;
-
-    /* 현재 시각의 상태를 샘플에서 보간 */
-    const S = res.S, N = S.t.length;
-    let i = Math.min(N - 1, Math.max(0, Math.round(tNow / (DT * SAMP))));
-    const j = Math.min(N - 1, i + 1);
-    const f = Math.min(1, Math.max(0, (tNow - S.t[i]) / Math.max(1e-9, S.t[j] - S.t[i])));
-    const bx = S.x[i] + (S.x[j] - S.x[i]) * f;
-    const by = S.y[i] + (S.y[j] - S.y[i]) * f;
-    const bz = S.z[i] + (S.z[j] - S.z[i]) * f;
-
-    /* 방출 각도 기준선 (±θ₀) 과 평형 수직선 */
-    ctx.setLineDash([3, 4]); ctx.lineWidth = 1; ctx.strokeStyle = PAL.line;
-    ctx.beginPath();
-    ctx.moveTo(px(0, 0), py(0, 0, 0)); ctx.lineTo(px(0, 0), py(0, 0, -l0));
-    for (const sgn of [-1, 1]) {
-      ctx.moveTo(px(0, 0), py(0, 0, 0));
-      ctx.lineTo(px(sgn * l0 * Math.sin(th0), 0), py(sgn * l0 * Math.sin(th0), 0, -l0 * Math.cos(th0)));
-    }
-    ctx.stroke(); ctx.setLineDash([]);
-
-    /* 지나온 궤적 */
-    ctx.strokeStyle = PAL.trace; ctx.lineWidth = 1.4; ctx.globalAlpha = 0.75;
-    ctx.beginPath();
-    for (let k = 0; k <= i; k++) {
-      const X = px(S.x[k], S.y[k]), Y = py(S.x[k], S.y[k], S.z[k]);
-      k === 0 ? ctx.moveTo(X, Y) : ctx.lineTo(X, Y);
-    }
-    ctx.stroke(); ctx.globalAlpha = 1;
-
-    /* 바닥 그림자 */
-    const shX = px(bx, by), shY = py(bx, by, floor);
-    ctx.fillStyle = PAL.grid; ctx.globalAlpha = 0.55;
-    ctx.beginPath(); ctx.ellipse(shX, shY, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
-
-    /* 지지대 */
-    const pX = px(0, 0), pY = py(0, 0, 0);
-    ctx.strokeStyle = PAL.ink2; ctx.lineWidth = 3; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(pX - 26, pY); ctx.lineTo(pX + 26, pY); ctx.stroke();
-    ctx.lineWidth = 1; ctx.strokeStyle = PAL.muted; ctx.globalAlpha = 0.6;
-    ctx.beginPath();
-    for (let d = -24; d <= 22; d += 8) { ctx.moveTo(pX + d, pY); ctx.lineTo(pX + d + 6, pY - 7); }
-    ctx.stroke(); ctx.globalAlpha = 1;
-
-    /* 실 + 추 */
-    const bX = px(bx, by), bY = py(bx, by, bz);
-    ctx.strokeStyle = PAL.string; ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.moveTo(pX, pY); ctx.lineTo(bX, bY); ctx.stroke();
-
-    const rad = Math.max(5, Math.min(26, s * res.r * 3.2));
-    const grd = ctx.createRadialGradient(bX - rad * 0.35, bY - rad * 0.4, rad * 0.15, bX, bY, rad);
-    grd.addColorStop(0, PAL.panel); grd.addColorStop(0.35, PAL.bob); grd.addColorStop(1, PAL.bob);
-    ctx.fillStyle = grd;
-    ctx.beginPath(); ctx.arc(bX, bY, rad, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = PAL.panel; ctx.lineWidth = 1.5; ctx.stroke();
-
-    /* 평형점 표시 */
-    ctx.fillStyle = PAL.muted; ctx.globalAlpha = 0.85;
-    ctx.beginPath(); ctx.arc(px(0, 0), py(0, 0, -l0), 2.5, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.font = MONO; ctx.fillStyle = PAL.muted; ctx.textAlign = "left";
-    ctx.fillText("평형점 θ=0", px(0, 0) + 7, py(0, 0, -l0) + 13);
-  }
-
-  /* ============================ θ(t) 그래프 ============================ */
-  function drawTheta(res, tNow) {
-    const { ctx, w, h } = fit(document.getElementById("theta"));
-    if (!res) return;
-    const L = 40, R = 10, T = 12, B = 24;
-    const pw = w - L - R, ph = h - T - B;
-    const tMax = res.tEnd, aMax = res.th0deg * 1.12;
-    const X = t => L + pw * (t / tMax);
-    const Y = a => T + ph * (0.5 - a / (2 * aMax));
-
-    /* 측정 구간 음영 */
-    ctx.fillStyle = PAL.theta; ctx.globalAlpha = 0.07;
-    ctx.fillRect(X(res.tFirst), T, X(res.tLast) - X(res.tFirst), ph);
-    ctx.globalAlpha = 1;
-
-    /* 격자 · 축 */
-    ctx.strokeStyle = PAL.soft; ctx.lineWidth = 1; ctx.beginPath();
-    for (const a of [-res.th0deg, 0, res.th0deg]) { ctx.moveTo(L, Y(a)); ctx.lineTo(L + pw, Y(a)); }
-    ctx.stroke();
-    ctx.font = MONO; ctx.fillStyle = PAL.muted; ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    for (const a of [-res.th0deg, 0, res.th0deg]) ctx.fillText(a.toFixed(0) + "°", L - 6, Y(a));
-    ctx.textAlign = "center"; ctx.textBaseline = "top";
-    const tick = tMax > 24 ? 5 : 2;
-    for (let t = 0; t <= tMax; t += tick) { ctx.fillText(t.toFixed(0), X(t), h - B + 6); }
-    ctx.fillText("t [s]", L + pw / 2, h - 10);
-
-    /* θ(t) 트레이스 (현재 시각까지) */
-    const S = res.S, upto = Math.min(S.t.length - 1, Math.round(tNow / (DT * SAMP)));
-    ctx.strokeStyle = PAL.theta; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.beginPath();
-    for (let k = 0; k <= upto; k++) {
-      const x = X(S.t[k]), y = Y(S.th[k] * 180 / Math.PI);
-      k === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    /* 통과 지점 마커 */
-    ctx.fillStyle = PAL.mark;
-    for (let k = 0; k <= res.n; k++) {
-      const tc = res.cross[k];
-      if (tc > tNow) break;
-      const x = X(tc), y = Y(0);
-      ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x - 4, y - 13); ctx.lineTo(x + 4, y - 13);
-      ctx.closePath(); ctx.fill();
+        "m_g": m_g, "l_m": l_m, "theta0_deg": theta0_deg,
+        "n_used": n_used,
+        "T_phys": T_phys, "T_meas": T_meas, "delta": delta,
+        "t_span_phys": t_span_phys, "t_span_meas": t_span_meas,
+        "T_theory": T_theory, "T_corr": T_corr,
+        "ts": ts, "th": th_s, "X": X, "Y": Yc, "Z": Z,
+        "cross": crossings[: n_used + 1],
+        "A_str": A_str, "f_str": f_str, "eps": eps, "r_bob": r,
     }
 
-    /* 현재 시각 커서 */
-    if (tNow < tMax - 1e-6) {
-      ctx.strokeStyle = PAL.mark; ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(X(tNow), T); ctx.lineTo(X(tNow), T + ph); ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-  }
 
-  /* ============================ 위에서 본 궤적 ============================ */
-  function drawTop(res, tNow) {
-    const { ctx, w, h } = fit(document.getElementById("top"));
-    if (!res) return;
-    const M = 26, pw = w - M * 2, ph = h - M * 2;
-    const ax = Math.max(res.maxX, 1e-4), ay = Math.max(res.maxY, 1e-5);
-    const X = x => M + pw * (0.5 + 0.47 * x / ax);
-    const Y = y => M + ph * (0.5 - 0.44 * y / ay);
+# =====================================================================================
+# 2. 시각화 : 3차원 궤적 + 각변위 그래프
+# =====================================================================================
+def draw_figure(res):
+    """왼쪽 : 3차원 궤적 / 가운데 : 위에서 본 x–y 궤적 / 오른쪽 : 각변위 θ(t)."""
+    X, Y, Z, ts, th = res["X"], res["Y"], res["Z"], res["ts"], res["th"]
+    l_m = res["l_m"]
 
-    ctx.strokeStyle = PAL.soft; ctx.lineWidth = 1; ctx.beginPath();
-    ctx.moveTo(M, Y(0)); ctx.lineTo(w - M, Y(0));
-    ctx.moveTo(X(0), M); ctx.lineTo(X(0), h - M);
-    ctx.stroke();
+    fig = plt.figure(figsize=(12.6, 4.3))
+    gs  = fig.add_gridspec(1, 3, width_ratios=[1.05, 0.82, 1.20], wspace=0.34)
+    ax3 = fig.add_subplot(gs[0, 0], projection="3d")
+    axt = fig.add_subplot(gs[0, 1])
+    ax2 = fig.add_subplot(gs[0, 2])
 
-    const S = res.S, upto = Math.min(S.t.length - 1, Math.round(tNow / (DT * SAMP)));
-    ctx.strokeStyle = PAL.top; ctx.lineWidth = 1.2; ctx.globalAlpha = 0.85; ctx.beginPath();
-    for (let k = 0; k <= upto; k++) {
-      const x = X(S.x[k]), y = Y(S.y[k]);
-      k === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    }
-    ctx.stroke(); ctx.globalAlpha = 1;
+    # ---------- (1) 3차원 궤적 ----------
+    ax3.plot(X, Y, Z, lw=0.8, color="#3b6ea5", alpha=0.85)
+    ax3.scatter([X[0]], [Y[0]], [Z[0]], s=28, color="#d1495b", zorder=5)
+    ax3.scatter([0], [0], [0], marker="s", s=26, color="#444444")      # 지지점
 
-    if (upto >= 0) {
-      ctx.fillStyle = PAL.bob;
-      ctx.beginPath(); ctx.arc(X(S.x[upto]), Y(S.y[upto]), 4, 0, Math.PI * 2); ctx.fill();
-    }
+    lim = max(l_m * np.sin(np.deg2rad(res["theta0_deg"])) * 1.25, l_m * 0.08)
+    ax3.set_xlim(-lim, lim)
+    ax3.set_ylim(-lim, lim)
+    ax3.set_zlim(-l_m * 1.05, 0.0)
+    ax3.set_xlabel("x [m]", fontsize=9)
+    ax3.set_ylabel("y [m]", fontsize=9)
+    ax3.set_zlabel("z [m]", fontsize=9)
+    ax3.set_title(L("traj3d"), fontsize=10.5, pad=6)
+    ax3.tick_params(labelsize=7)
+    ax3.view_init(elev=18, azim=-58)
+    ax3.set_box_aspect((1, 1, 0.95))
 
-    ctx.font = MONO; ctx.fillStyle = PAL.muted;
-    ctx.textAlign = "right"; ctx.textBaseline = "bottom";
-    ctx.fillText("x  ±" + ax.toFixed(2) + " m", w - M, h - 8);
-    ctx.textAlign = "left"; ctx.textBaseline = "top";
-    ctx.fillText("y  ±" + (ay * 1000).toFixed(1) + " mm", M, 8);
-  }
+    ax3.plot([0, X[0]], [0, Y[0]], [0, Z[0]], lw=1.1, color="#777777")   # 실
+    ax3.plot([X[0]], [Y[0]], [Z[0]], "o", ms=9, color="#d1495b")         # 추
 
-  /* ============================ 초시계 UI ============================ */
-  const el$ = id => document.getElementById(id);
-  const lapGrid = el$("lapGrid");
-  for (let i = 1; i <= NC; i++) {
-    const d = document.createElement("div");
-    d.className = "lap";
-    d.innerHTML = `<span class="n">${i}회</span><span class="v">—</span>`;
-    lapGrid.appendChild(d);
-  }
-  const lapRows = [...lapGrid.children];
+    # ---------- (2) 위에서 본 x–y 궤적 : 원뿔진자(리사주) 효과가 가장 잘 보인다 ----------
+    axt.plot(X, Y, lw=0.7, color="#8e6fb0", alpha=0.9)
+    axt.plot([X[0]], [Y[0]], "o", ms=5, color="#d1495b")
+    axt.axhline(0.0, lw=0.7, color="#cccccc")
+    axt.set_xlabel("x [m]", fontsize=9)
+    axt.set_ylabel(f"y [m]   ({L('note')})", fontsize=9)
+    axt.set_title(L("top"), fontsize=10.5, pad=14)   # 지수 표기(1e-2)와 겹치지 않도록
+    axt.tick_params(labelsize=7)
+    axt.ticklabel_format(axis="y", style="sci", scilimits=(-2, 2))
+    axt.grid(alpha=0.22)
 
-  function fmt(t) {
-    const s = Math.floor(t), ms = Math.round((t - s) * 1000);
-    return (t >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : String(s)) +
-      "." + String(ms).padStart(3, "0");
-  }
+    # ---------- (3) 각변위 θ(t) ----------
+    ax2.plot(ts, np.rad2deg(th), lw=1.0, color="#2a9d8f")
+    ax2.axhline(0.0, lw=0.8, color="#999999", ls="--")
+    cr = res["cross"]
+    ax2.plot(cr, np.zeros_like(cr), "v", ms=6, color="#e76f51", label=L("cross"))
+    ax2.set_xlabel(L("time"), fontsize=9)
+    ax2.set_ylabel(L("ang"), fontsize=9)
+    ax2.set_title(L("theta"), fontsize=11)
+    ax2.tick_params(labelsize=8)
+    ax2.grid(alpha=0.25)
+    ax2.legend(fontsize=8, loc="upper right")
 
-  /* 초시계가 보여주는 값은 '사람이 잰 값' — 물리적 경과 시간에 반응시간 오차 δ 가 실려 있다.
-     따라서 최종 판독값 = 실제 10회 왕복 시간 × (1+δ) = 리포트의 T측정 × 10 과 정확히 일치한다. */
-  function updateWatch(res, tNow) {
-    if (!res) return;
-    let laps = 0;
-    for (let k = 0; k <= res.n; k++) if (res.cross[k] <= tNow) laps = k;
-    const started = res.cross[0] <= tNow;
-    const k = 1 + res.delta;
-    const elapsed = started ? (Math.min(tNow, res.tLast) - res.cross[0]) * k : 0;
-    const done = laps >= res.n;
+    # 3D 축이 섞여 있어 tight_layout 대신 여백을 직접 지정
+    fig.subplots_adjust(left=0.015, right=0.975, top=0.88, bottom=0.15)
+    plt.show()
+    plt.close(fig)              # 메모리 누수 방지 : 그린 즉시 figure 해제
+    gc.collect()
 
-    el$("wTime").innerHTML = fmt(elapsed) + '<span class="ms"> s</span>';
-    el$("wLaps").textContent = laps;
-    el$("wBar").style.width = (100 * laps / NC).toFixed(1) + "%";
 
-    const st = el$("wState"), txt = el$("wStateText");
-    st.classList.toggle("run", started && !done);
-    st.classList.toggle("done", done);
-    txt.textContent = !started ? "측정 대기 — 평형점 통과 시 시작"
-      : done ? "측정 완료" : "측정 중";
+def make_animation(res):
+    """
+    3차원 진자 운동 애니메이션(HTML) 생성.
+    코랩 메모리 보호를 위해 ① 전용 소형 figure ② 낮은 dpi ③ 프레임 수 제한을 적용하고,
+    생성 직후 figure 와 animation 객체를 즉시 해제한다.
+    """
+    X, Y, Z, l_m = res["X"], res["Y"], res["Z"], res["l_m"]
+    step = max(1, len(X) // FRAME_MAX)
+    idx  = np.arange(0, len(X), step)
 
-    for (let i = 1; i <= NC; i++) {
-      const row = lapRows[i - 1];
-      const on = i <= laps && i <= res.n;
-      row.classList.toggle("on", on);
-      row.lastChild.textContent = on ? ((res.cross[i] - res.cross[0]) * k).toFixed(2) + " s" : "—";
-    }
+    fig = plt.figure(figsize=(4.6, 4.2), dpi=ANIM_DPI)
+    ax  = fig.add_subplot(111, projection="3d")
+    ax.plot(X, Y, Z, lw=0.5, color="#b8c6d6", alpha=0.8)
 
-    el$("derive").hidden = !done;
-    if (done) {
-      const total = res.tSpan * k;
-      el$("deriveLine").textContent = `${total.toFixed(3)} s ÷ ${res.n}회`;
-      el$("deriveRes").textContent = `T = ${(total / res.n).toFixed(4)} s`;
-    }
-  }
+    lim = max(l_m * np.sin(np.deg2rad(res["theta0_deg"])) * 1.25, l_m * 0.08)
+    ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim); ax.set_zlim(-l_m * 1.05, 0.0)
+    ax.set_xlabel("x [m]", fontsize=8); ax.set_ylabel("y [m]", fontsize=8)
+    ax.set_zlabel("z [m]", fontsize=8)
+    ax.tick_params(labelsize=6)
+    ax.view_init(elev=18, azim=-58)
 
-  /* ============================ 리포트 ============================ */
-  const state = { res: null, runNo: 0, key: null, history: [] };
+    line, = ax.plot([0, X[0]], [0, Y[0]], [0, Z[0]], lw=1.2, color="#666666")
+    bob,  = ax.plot([X[0]], [Y[0]], [Z[0]], "o", ms=9, color="#d1495b")
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.05)
 
-  function renderReport(res) {
-    const tb = el$("report").querySelector("tbody");
-    const errPh = (res.T_meas - res.T_phys) / res.T_phys * 100;
-    const errTh = (res.T_meas - res.T_theory) / res.T_theory * 100;
-    const errCo = (res.T_meas - res.T_corr) / res.T_corr * 100;
-    const sec = t => `<tr class="sec"><th colspan="3">${t}</th></tr>`;
-    const row = (a, b, c = "", cls = "") =>
-      `<tr class="${cls}"><td>${a}</td><td class="v">${b}</td><td class="d">${c}</td></tr>`;
-    const pct = v => (v >= 0 ? "+" : "") + v.toFixed(2) + " %";
+    def _update(k):
+        i = idx[k]
+        line.set_data([0, X[i]], [0, Y[i]]); line.set_3d_properties([0, Z[i]])
+        bob.set_data([X[i]], [Y[i]]);        bob.set_3d_properties([Z[i]])
+        return line, bob
 
-    tb.innerHTML =
-      sec("① 입력 변수") +
-      row("진자의 질량 m", res.mg.toFixed(0) + " g", "추 반지름 " + (res.r * 100).toFixed(2) + " cm") +
-      row("실의 길이 l", res.l0.toFixed(2) + " m") +
-      row("초기 방출 각도 θ₀", res.th0deg.toFixed(0) + " °") +
-      sec("② 초시계 측정 결과") +
-      row(res.n + "회 왕복 총 소요시간", (res.T_meas * res.n).toFixed(3) + " s") +
-      row("1회 평균 주기 T<sub>측정</sub>", res.T_meas.toFixed(4) + " s", "", "key") +
-      row("시뮬레이션 실제 주기 T<sub>물리</sub>", res.T_phys.toFixed(4) + " s", "측정오차 " + pct(errPh)) +
-      sec("③ 이론값 비교") +
-      row("소각도 이론 주기 T<sub>이론</sub>", res.T_theory.toFixed(4) + " s", pct(errTh)) +
-      row("대각도 보정 주기 T<sub>보정</sub>", res.T_corr.toFixed(4) + " s", pct(errCo));
+    anim = animation.FuncAnimation(fig, _update, frames=len(idx),
+                                   interval=50, blit=False)
+    html = anim.to_jshtml(fps=20)
+    plt.close(fig)
+    del anim
+    gc.collect()
+    return html
 
-    el$("noteBox").innerHTML =
-      `<code>T<sub>이론</sub> = 2π√(l/g)</code> · <code>T<sub>보정</sub> = T<sub>이론</sub>·(1 + θ₀²/16)</code> (θ₀는 rad)<br>` +
-      `이번 실험에 뽑힌 오차 요인 — 실 떨림 ${(res.As * 1000).toFixed(2)} mm @ ${res.fs.toFixed(1)} Hz · ` +
-      `직교 진동수 어긋남 ${(res.eps * 100 >= 0 ? "+" : "") + (res.eps * 100).toFixed(2)} % · ` +
-      `반응시간 오차 δ = ${(res.delta * 100 >= 0 ? "+" : "") + (res.delta * 100).toFixed(2)} %` +
-      (res.dragScale > 1 ? ` · 공기저항 ×${res.dragScale}` : "");
 
-    el$("runNo").textContent = "제 " + state.runNo + " 회 측정";
-  }
+# =====================================================================================
+# 3. 실험 리포트(HTML) 생성
+# =====================================================================================
+def build_report(res, run_no, history):
+    """측정 결과와 이론값 비교를 담은 HTML 리포트 문자열을 생성."""
+    T_meas, T_th, T_co = res["T_meas"], res["T_theory"], res["T_corr"]
+    err_th = (T_meas - T_th) / T_th * 100.0
+    err_co = (T_meas - T_co) / T_co * 100.0
+    err_ph = (T_meas - res["T_phys"]) / res["T_phys"] * 100.0
 
-  function renderHistory() {
-    const v = state.history;
-    el$("histN").textContent = v.length + "회";
-    el$("histChips").innerHTML = v.slice(-14).map((x, i, a) =>
-      `<span class="chip${i === a.length - 1 ? " last" : ""}">${x.toFixed(3)}</span>`).join("");
-    const has = v.length >= 2;
-    el$("histStats").hidden = !has;
-    el$("histEmpty").hidden = has;
-    if (has) {
-      const mean = v.reduce((a, b) => a + b, 0) / v.length;
-      const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / (v.length - 1));
-      el$("hMean").textContent = mean.toFixed(4) + " s";
-      el$("hSd").textContent = sd.toFixed(4) + " s";
-      el$("hRange").textContent = (Math.max(...v) - Math.min(...v)).toFixed(4) + " s";
-    }
-  }
+    def row(a, b, c=""):
+        return (f"<tr><td style='padding:5px 10px;border-bottom:1px solid #eee;"
+                f"color:#555'>{a}</td>"
+                f"<td style='padding:5px 10px;border-bottom:1px solid #eee;"
+                f"text-align:right;font-weight:600'>{b}</td>"
+                f"<td style='padding:5px 10px;border-bottom:1px solid #eee;"
+                f"text-align:right;color:#888'>{c}</td></tr>")
 
-  /* ============================ 재생 제어 ============================ */
-  const play = { on: false, t: 0, speed: 1, last: 0, raf: 0 };
+    # 반복 측정 이력 (동일 조건에서 값이 어떻게 흩어지는지 확인)
+    hist_html = ""
+    if len(history) >= 2:
+        vals = np.array([h["T_meas"] for h in history])
+        items = "  ".join(f"<span style='display:inline-block;padding:2px 7px;margin:2px;"
+                          f"background:#eef3f8;border-radius:4px'>{v:.3f}</span>"
+                          for v in vals[-10:])
+        hist_html = (
+            "<div style='margin-top:12px;padding:10px 12px;background:#fafbfc;"
+            "border:1px solid #e6e9ec;border-radius:6px'>"
+            "<b style='font-size:13px'>동일 조건 반복 측정값 T<sub>측정</sub> [s]</b><br>"
+            f"<div style='margin:6px 0'>{items}</div>"
+            f"<span style='font-size:12px;color:#666'>평균 {vals.mean():.4f} s · "
+            f"표준편차 {vals.std(ddof=1):.4f} s · 측정 횟수 {len(vals)}회</span></div>"
+        )
 
-  function drawAll() {
-    drawStage(state.res, play.t);
-    drawTheta(state.res, play.t);
-    drawTop(state.res, play.t);
-  }
+    return f"""
+    <div style="font-family:'Malgun Gothic','AppleGothic',sans-serif;font-size:13.5px;
+                line-height:1.6;max-width:640px;border:1px solid #e6e9ec;
+                border-radius:8px;padding:12px 16px">
+      <div style="font-size:15px;font-weight:700;margin-bottom:8px">
+        📋 진자 주기 측정 실험 리포트 &nbsp;
+        <span style="font-size:12px;color:#888">(제 {run_no} 회 측정)</span>
+      </div>
 
-  function frame(now) {
-    if (!play.on) return;
-    const dt = Math.min(0.06, (now - play.last) / 1000);
-    play.last = now;
-    play.t = Math.min(state.res.tEnd, play.t + dt * play.speed);
-    drawAll();
-    updateWatch(state.res, play.t);
-    if (play.t >= state.res.tEnd - 1e-9) { finish(); return; }
-    play.raf = requestAnimationFrame(frame);
-  }
+      <table style="border-collapse:collapse;width:100%">
+        <tr><th colspan="3" style="text-align:left;background:#eef3f8;padding:5px 10px;
+            border-radius:4px">① 입력 변수</th></tr>
+        {row("진자의 질량 m", f"{res['m_g']:.0f} g", f"추 반지름 {res['r_bob']*100:.2f} cm")}
+        {row("실의 길이 l", f"{res['l_m']:.2f} m")}
+        {row("초기 방출 각도 θ₀", f"{res['theta0_deg']:.0f} °")}
 
-  function start() {
-    play.on = true; play.last = performance.now();
-    el$("pause").disabled = false; el$("skip").disabled = false;
-    el$("pause").textContent = "일시정지";
-    play.raf = requestAnimationFrame(frame);
-  }
+        <tr><th colspan="3" style="text-align:left;background:#eef3f8;padding:5px 10px;
+            border-radius:4px">② 실험 결과 (측정값)</th></tr>
+        {row(f"{res['n_used']}회 왕복 총 소요시간", f"{res['t_span_meas']:.3f} s")}
+        {row("1회 평균 주기 T<sub>측정</sub>", f"{res['T_meas']:.4f} s")}
+        {row("시뮬레이션 실제 주기 T<sub>물리</sub>", f"{res['T_phys']:.4f} s",
+             f"측정오차 {err_ph:+.2f} %")}
 
-  function finish() {
-    play.on = false; cancelAnimationFrame(play.raf);
-    play.t = state.res.tEnd;
-    drawAll(); updateWatch(state.res, play.t);
-    el$("pause").disabled = true; el$("skip").disabled = true;
-    el$("reportCard").classList.remove("busy");
-    state.history.push(state.res.T_meas);
-    renderReport(state.res); renderHistory();
-  }
+        <tr><th colspan="3" style="text-align:left;background:#eef3f8;padding:5px 10px;
+            border-radius:4px">③ 이론값 비교</th></tr>
+        {row("소각도 이론 주기 T<sub>이론</sub>", f"{res['T_theory']:.4f} s",
+             f"{err_th:+.2f} %")}
+        {row("대각도 보정 주기 T<sub>보정</sub>", f"{res['T_corr']:.4f} s",
+             f"{err_co:+.2f} %")}
+      </table>
 
-  function runExperiment(animate) {
-    cancelAnimationFrame(play.raf); play.on = false;
-    const mg = +el$("fm").value, l0 = +el$("fl").value, a = +el$("fa").value, d = +el$("fd").value;
-    const key = [mg, l0, a, d].join("|");
-    if (key !== state.key) { state.key = key; state.history = []; }
+      <div style="margin-top:10px;font-size:12px;color:#666">
+        · T<sub>이론</sub> = 2π√(l/g) &nbsp;|&nbsp;
+          T<sub>보정</sub> = T<sub>이론</sub>·(1 + θ₀²/16) &nbsp;(θ₀ 단위: rad)<br>
+        · 반영된 오차 요인 : 실 떨림 {res['A_str']*1000:.2f} mm @ {res['f_str']:.1f} Hz,
+          직교 진동수 어긋남 {res['eps']*100:+.2f} %, 반응시간 오차 δ = {res['delta']*100:+.2f} %
+      </div>
+      {hist_html}
+    </div>
+    """
 
-    const res = simulate(mg, l0, a, d);
-    if (!res) { alert("주기를 검출하지 못했습니다. 변수를 조정해 주세요."); return; }
-    state.res = res; state.runNo++;
-    play.t = animate ? 0 : res.tEnd;
 
-    if (animate) {
-      el$("reportCard").classList.add("busy");
-      drawAll(); updateWatch(res, 0);
-      start();
-    } else {
-      finish();
-    }
-  }
+# =====================================================================================
+# 4. ipywidgets 사용자 인터페이스
+# =====================================================================================
+_STYLE  = {"description_width": "150px"}
+_LAYOUT = widgets.Layout(width="420px")
 
-  /* ============================ 이벤트 ============================ */
-  const fmtVal = () => {
-    el$("vm").textContent = (+el$("fm").value).toFixed(0) + " g";
-    el$("vl").textContent = (+el$("fl").value).toFixed(2) + " m";
-    el$("va").textContent = (+el$("fa").value).toFixed(0) + "°";
-    const d = +el$("fd").value;
-    el$("vd").textContent = d === 1 ? "×1 (실제)" : "×" + d;
-    el$("bMass").textContent = "m = " + (+el$("fm").value).toFixed(0) + " g";
-    el$("bLen").textContent = "l = " + (+el$("fl").value).toFixed(2) + " m";
-    el$("bAng").textContent = "θ₀ = " + (+el$("fa").value).toFixed(0) + "°";
-  };
-  ["fm", "fl", "fa", "fd"].forEach(id => el$(id).addEventListener("input", fmtVal));
+w_mass  = widgets.FloatSlider(value=100.0, min=10.0,  max=500.0, step=5.0,
+                              description="진자의 질량 m [g]",
+                              readout_format=".0f", continuous_update=False,
+                              style=_STYLE, layout=_LAYOUT)
+w_len   = widgets.FloatSlider(value=1.00, min=0.20,  max=2.00,  step=0.05,
+                              description="실의 길이 l [m]",
+                              readout_format=".2f", continuous_update=False,
+                              style=_STYLE, layout=_LAYOUT)
+w_ang   = widgets.FloatSlider(value=20.0, min=5.0,   max=60.0,  step=1.0,
+                              description="초기 방출 각도 θ₀ [°]",
+                              readout_format=".0f", continuous_update=False,
+                              style=_STYLE, layout=_LAYOUT)
+w_anim  = widgets.Checkbox(value=False, description="3D 애니메이션 재생 (느림)",
+                           indent=False, layout=widgets.Layout(width="260px"))
+w_reset = widgets.Button(description="측정 이력 초기화", icon="trash",
+                         layout=widgets.Layout(width="170px"))
+w_run   = widgets.Button(description="실험 시작 / 다시 측정", button_style="primary",
+                         icon="play", layout=widgets.Layout(width="230px", height="40px"))
 
-  el$("run").addEventListener("click", () => runExperiment(true));
-  el$("pause").addEventListener("click", () => {
-    if (play.on) { play.on = false; cancelAnimationFrame(play.raf); el$("pause").textContent = "이어보기"; }
-    else { start(); }
-  });
-  el$("skip").addEventListener("click", finish);
-  el$("clear").addEventListener("click", () => { state.history = []; renderHistory(); });
-  document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
-    document.querySelectorAll(".seg button").forEach(o => o.removeAttribute("aria-pressed"));
-    b.setAttribute("aria-pressed", "true");
-    play.speed = +b.dataset.sp;
-  }));
+out_plot   = widgets.Output(layout=widgets.Layout(width="100%", min_height="360px"))
+out_report = widgets.Output(layout=widgets.Layout(width="100%"))
 
-  /* 무대 드래그로 시점 회전 */
-  let drag = null;
-  stageCv.addEventListener("pointerdown", e => {
-    drag = { x: e.clientX, y: e.clientY, az, el };
-    stageCv.setPointerCapture(e.pointerId);
-  });
-  stageCv.addEventListener("pointermove", e => {
-    if (!drag) return;
-    az = drag.az + (e.clientX - drag.x) * 0.006;
-    el = Math.max(-0.15, Math.min(1.25, drag.el + (e.clientY - drag.y) * 0.004));
-    if (!play.on) drawStage(state.res, play.t);
-  });
-  const endDrag = () => { drag = null; };
-  stageCv.addEventListener("pointerup", endDrag);
-  stageCv.addEventListener("pointercancel", endDrag);
+# 실행 상태 (측정 회차 · 동일 조건 반복 측정 이력)
+_state = {"run_no": 0, "key": None, "history": [], "rng": np.random.default_rng()}
 
-  let rz;
-  addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(drawAll, 90); });
 
-  /* ============================ 첫 화면 ============================ */
-  fmtVal();
-  runExperiment(false);     // 완료된 측정 한 건을 보여준 상태로 시작
-})();
-</script>
+def _on_run(_):
+    """[실험 시작 / 다시 측정] 버튼 콜백 — 누를 때마다 독립된 오차로 재측정."""
+    w_run.disabled = True
+    try:
+        m, l, a = w_mass.value, w_len.value, w_ang.value
 
-</body>
-</html>
+        # 입력 변수가 바뀌면 반복 측정 이력을 새로 시작
+        key = (round(m, 3), round(l, 3), round(a, 3))
+        if key != _state["key"]:
+            _state["key"], _state["history"] = key, []
+
+        res = simulate(m, l, a, _state["rng"])     # 매 호출마다 새로운 난수 → 독립 측정
+        _state["run_no"] += 1
+        _state["history"].append({"T_meas": res["T_meas"]})
+
+        # ---- 그래프 출력 ----
+        with out_plot:
+            out_plot.clear_output(wait=True)       # 이전 렌더링을 먼저 비워 메모리 절약
+            draw_figure(res)
+            if w_anim.value:
+                display(HTML(make_animation(res)))
+
+        # ---- 리포트 출력 ----
+        with out_report:
+            out_report.clear_output(wait=True)
+            display(HTML(build_report(res, _state["run_no"], _state["history"])))
+
+        del res
+        gc.collect()
+    except Exception as e:
+        with out_report:
+            out_report.clear_output(wait=True)
+            display(HTML(f"<b style='color:#c0392b'>오류 발생: {e}</b>"))
+    finally:
+        w_run.disabled = False
+
+
+def _on_reset(_):
+    """반복 측정 이력만 지운다 (그래프·리포트는 유지)."""
+    _state["history"] = []
+    with out_report:
+        out_report.clear_output(wait=True)
+        display(HTML("<span style='color:#666'>측정 이력을 초기화했습니다. "
+                     "[실험 시작] 버튼을 눌러 주세요.</span>"))
+
+
+w_run.on_click(_on_run)
+w_reset.on_click(_on_reset)
+
+_header = widgets.HTML(
+    "<div style=\"font-family:'Malgun Gothic','AppleGothic',sans-serif\">"
+    "<h3 style='margin:4px 0'>🔬 진자 운동 주기 측정 실험 "
+    "<span style='font-size:13px;color:#888'>— 3차원 오차 요인 반영</span></h3>"
+    "<div style='font-size:13px;color:#555;margin-bottom:6px'>"
+    "변수를 설정한 뒤 <b>[실험 시작 / 다시 측정]</b> 을 누르세요. "
+    "같은 조건이라도 실의 떨림·공기 와류·반응 시간 오차 때문에 매번 다른 값이 측정됩니다."
+    "</div></div>")
+
+_ui = widgets.VBox([
+    _header,
+    widgets.HBox([widgets.VBox([w_mass, w_len, w_ang]),
+                  widgets.VBox([w_run, w_anim, w_reset])]),
+    out_plot,        # 상단 : 3차원 궤적 · 위에서 본 궤적 · θ(t) 그래프
+    out_report,      # 하단 : 실험 리포트
+])
+
+display(_ui)
+
+# 첫 실행 안내
+with out_report:
+    display(HTML("<span style='color:#666;font-family:sans-serif'>"
+                 "▶ [실험 시작 / 다시 측정] 버튼을 눌러 첫 측정을 시작하세요.</span>"))
